@@ -91,6 +91,7 @@ export async function POST(req) {
             system: systemFull,
             tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
             messages: messages.map((m) => ({ role: m.role, content: m.content })),
+            stream: false,
           });
 
           let fullText = '';
@@ -98,13 +99,12 @@ export async function POST(req) {
 
           for (const block of response.content) {
             if (block.type === 'text') fullText += block.text;
-            if (block.type === 'tool_result') {
-              try {
-                const parsed = JSON.parse(typeof block.content === 'string' ? block.content : JSON.stringify(block.content));
-                if (Array.isArray(parsed?.results)) {
-                  parsed.results.forEach((r) => { if (r.url && r.title) sources.push({ url: r.url, title: r.title }); });
+            if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) {
+              for (const entry of block.content) {
+                if (entry.type === 'web_search_result' && entry.url && entry.title) {
+                  sources.push({ url: entry.url, title: entry.title });
                 }
-              } catch {}
+              }
             }
           }
 
@@ -119,8 +119,13 @@ export async function POST(req) {
 
           controller.close();
         } catch (err) {
-          console.error('Dr. Mirza API error:', err);
-          controller.enqueue(encoder.encode('⚠️ I encountered an issue retrieving current data. Please try again.'));
+          console.error('Dr. Mirza API error:', err?.status, err?.message, JSON.stringify(err?.error || {}));
+          const msg = err?.status === 401
+            ? '⚠️ Invalid API key. Please check your ANTHROPIC_API_KEY environment variable.'
+            : err?.status === 429
+            ? '⚠️ Rate limit reached. Please wait a moment and try again.'
+            : `⚠️ I encountered an issue (${err?.status || 'network error'}). Please try again.`;
+          controller.enqueue(encoder.encode(msg));
           controller.close();
         }
       },
