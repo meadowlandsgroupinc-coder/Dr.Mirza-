@@ -85,14 +85,30 @@ export async function POST(req) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const response = await client.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 2000,
-            system: systemFull,
-            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
-            messages: messages.map((m) => ({ role: m.role, content: m.content })),
-            stream: false,
-          });
+          const apiMessages = messages
+            .filter((m) => m.content && m.content.trim())
+            .map((m) => ({ role: m.role, content: m.content }));
+
+          let response;
+          try {
+            // Try with web search first
+            response = await client.messages.create({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 2000,
+              system: systemFull,
+              tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
+              messages: apiMessages,
+            });
+          } catch (toolErr) {
+            console.warn('Web search tool failed, retrying without:', toolErr?.message);
+            // Fallback without web search
+            response = await client.messages.create({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 2000,
+              system: systemFull,
+              messages: apiMessages,
+            });
+          }
 
           let fullText = '';
           const sources = [];
@@ -119,12 +135,13 @@ export async function POST(req) {
 
           controller.close();
         } catch (err) {
-          console.error('Dr. Mirza API error:', err?.status, err?.message, JSON.stringify(err?.error || {}));
+          console.error('Dr. Mirza API error:', err?.status, err?.message, JSON.stringify(err?.error || err || {}));
+          const detail = err?.error?.error?.message || err?.message || '';
           const msg = err?.status === 401
             ? '⚠️ Invalid API key. Please check your ANTHROPIC_API_KEY environment variable.'
             : err?.status === 429
             ? '⚠️ Rate limit reached. Please wait a moment and try again.'
-            : `⚠️ I encountered an issue (${err?.status || 'network error'}). Please try again.`;
+            : `⚠️ API error (${err?.status || 'network'}): ${detail || 'Please try again.'}`;
           controller.enqueue(encoder.encode(msg));
           controller.close();
         }
